@@ -7,3 +7,21 @@
 # [global.tls]
 # certs = "private/cert.pem"
 # key = "private/key.pem"
+
+[development]
+address = "localhost"
+port = 8000
+log = "normal"
+limits = { forms = 32768, json = 128 }
+
+[staging]
+address = "0.0.0.0"
+port = 8000
+log = "normal"
+limits = { forms = 32768, json = 128  }
+
+[production]
+address = "0.0.0.0"
+port = 80
+log = "critical"
+limits = { forms = 32768, json = 128 }
