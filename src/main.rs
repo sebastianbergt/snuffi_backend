@@ -1,64 +1,74 @@
 #![feature(proc_macro_hygiene, decl_macro)]
 
-#[macro_use] extern crate rocket;
-#[macro_use] extern crate rocket_contrib;
-#[macro_use] extern crate serde_derive;
+#[macro_use]
+extern crate rocket;
+#[macro_use]
+extern crate rocket_contrib;
+#[macro_use]
+extern crate serde_derive;
 
-#[cfg(test)] mod tests;
-
-use std::sync::Mutex;
-use std::collections::HashMap;
-
-use rocket::State;
 use rocket_contrib::json::{Json, JsonValue};
 
-// The type to represent the ID of a message.
-type ID = usize;
+mod helper;
+use helper::path_exists;
 
-// We're going to store all of the messages here. No need for a DB.
-type MessageMap = Mutex<HashMap<ID, String>>;
+use std::fs::OpenOptions;
+use std::io::prelude::*;
+use std::time::SystemTime;
 
-#[derive(Serialize, Deserialize)]
-struct Message {
-    id: Option<ID>,
-    contents: String
+#[cfg(test)]
+mod tests;
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+struct Measurement {
+    v: i8,       // version number, should be 1 here
+    mac: String, // device mac adress
+    co2: i16,    // co2 value in ppm
+    temp: i8,    // temperature value in degrees celsius
+    state: i8,   // device info
 }
 
-// TODO: This example can be improved by using `route` with multiple HTTP verbs.
-#[post("/<id>", format = "json", data = "<message>")]
-fn new(id: ID, message: Json<Message>, map: State<MessageMap>) -> JsonValue {
-    let mut hashmap = map.lock().expect("map lock.");
-    if hashmap.contains_key(&id) {
+#[post("/measurement", format = "json", data = "<input>")]
+fn post_new_measurement(input: Json<Measurement>) -> JsonValue {
+    // mac adresses are usually 17 characters long, skip everything else
+    if input.mac.len() == 17 {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap();
+        let file_path = format!("./measurement/{}.csv", input.mac);
+
+        let file = OpenOptions::new()
+            .create_new(!path_exists(file_path.as_str()))
+            .append(true)
+            .open(file_path);
+
+        if file.is_err() {
+            return json!({
+                "status": "error",
+                "reason": "opening file"
+            });
+        }
+        let res = writeln!(
+            file.unwrap(),
+            "{}, {}, {}, {}",
+            now.as_secs(),
+            input.co2,
+            input.temp,
+            input.state
+        );
+        if res.is_err() {
+            return json!({
+                "status": "error",
+                "reason": "writing file"
+            });
+        }
+        return json!({ "status": "ok" });
+    } else {
         json!({
             "status": "error",
-            "reason": "ID exists. Try put."
+            "reason": "invalid mac adress"
         })
-    } else {
-        hashmap.insert(id, message.0.contents);
-        json!({ "status": "ok" })
     }
-}
-
-#[put("/<id>", format = "json", data = "<message>")]
-fn update(id: ID, message: Json<Message>, map: State<MessageMap>) -> Option<JsonValue> {
-    let mut hashmap = map.lock().unwrap();
-    if hashmap.contains_key(&id) {
-        hashmap.insert(id, message.0.contents);
-        Some(json!({ "status": "ok" }))
-    } else {
-        None
-    }
-}
-
-#[get("/<id>", format = "json")]
-fn get(id: ID, map: State<MessageMap>) -> Option<Json<Message>> {
-    let hashmap = map.lock().unwrap();
-    hashmap.get(&id).map(|contents| {
-        Json(Message {
-            id: Some(id),
-            contents: contents.clone()
-        })
-    })
 }
 
 #[catch(404)]
@@ -71,9 +81,8 @@ fn not_found() -> JsonValue {
 
 fn rocket() -> rocket::Rocket {
     rocket::ignite()
-        .mount("/message", routes![new, update, get])
+        .mount("/v1", routes![post_new_measurement])
         .register(catchers![not_found])
-        .manage(Mutex::new(HashMap::<ID, String>::new()))
 }
 
 fn main() {
