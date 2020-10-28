@@ -7,7 +7,9 @@ extern crate rocket_contrib;
 #[macro_use]
 extern crate serde_derive;
 
+use rocket::http::RawStr;
 use rocket_contrib::json::{Json, JsonValue};
+use rocket_contrib::serve::StaticFiles;
 
 mod helper;
 use helper::path_exists;
@@ -50,7 +52,7 @@ fn post_new_measurement(input: Json<Measurement>) -> JsonValue {
         }
         let res = writeln!(
             file.unwrap(),
-            "{}, {}, {}, {}",
+            "{},{},{},{}",
             now.as_secs(),
             input.co2,
             input.temp,
@@ -71,6 +73,46 @@ fn post_new_measurement(input: Json<Measurement>) -> JsonValue {
     }
 }
 
+#[get("/measurements/<devicemac>")]
+fn get_measurements(devicemac: &RawStr) -> JsonValue {
+    if devicemac.len() != 17 {
+        return json!({
+            "status": "error",
+            "reason": "not a valid mac address",
+        });
+    }
+    let file_path = format!("./measurement/{}.csv", devicemac);
+    let file = OpenOptions::new().read(true).open(file_path);
+    if file.is_err() {
+        return json!({
+            "status": "error",
+            "reason": "opening file"
+        });
+    }
+    let mut csv_reader = csv::Reader::from_reader(file.unwrap());
+    let mut timestamps: Vec<i64> = vec![];
+    let mut co2_values: Vec<i16> = vec![];
+    for record in csv_reader.records() {
+        match record {
+            Err(e) => {
+                return json!({
+                    "status": "error",
+                    "reason": format!("{:?}", e)
+                })
+            }
+            Ok(row) => {
+                timestamps.push(row[0].parse::<i64>().unwrap());
+                co2_values.push(row[1].parse::<i16>().unwrap());
+            }
+        }
+    }
+
+    return json!({
+        "timestamps": timestamps,
+        "co2_values": co2_values
+    });
+}
+
 #[catch(404)]
 fn not_found() -> JsonValue {
     json!({
@@ -81,7 +123,8 @@ fn not_found() -> JsonValue {
 
 fn rocket() -> rocket::Rocket {
     rocket::ignite()
-        .mount("/v1", routes![post_new_measurement])
+        .mount("/v1", routes![post_new_measurement, get_measurements])
+        .mount("/", StaticFiles::from("./static"))
         .register(catchers![not_found])
 }
 
