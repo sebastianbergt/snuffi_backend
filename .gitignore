@@ -1,3 +1,6 @@
 private/*.pem
+private/setup.md
 measurement/*
 target/*
+static
+
